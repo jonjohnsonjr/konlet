@@ -115,7 +115,7 @@ func GetDefaultRunner(osCommandRunner OsCommandRunner, metadataProvider metadata
 	return &ContainerRunner{Client: dockerClient, RandEnv: randEnv, VolumesEnv: &volumes.Env{OsCommandRunner: osCommandRunner, MetadataProvider: metadataProvider}}, nil
 }
 
-func (runner ContainerRunner) RunContainer(auth string, spec api.ContainerSpecStruct, detach bool) error {
+func (runner ContainerRunner) RunContainer(auth string, spec api.Container, detach bool) error {
 	var id string
 	var err error
 	id, err = createContainer(runner, auth, spec)
@@ -223,12 +223,7 @@ func containersStartedByKonlet(containers []dockertypes.Container, rawName strin
 	return idsNames
 }
 
-func createContainer(runner ContainerRunner, auth string, spec api.ContainerSpecStruct) (string, error) {
-	if len(spec.Containers) != 1 {
-		return "", fmt.Errorf("Exactly one container in declaration expected.")
-	}
-
-	container := spec.Containers[0]
+func createContainer(runner ContainerRunner, auth string, container api.Container) (string, error) {
 	generatedContainerName := fmt.Sprintf("%s-%s-%s", CONTAINER_NAME_PREFIX, container.Name, generateRandomSuffix(4, runner.RandEnv))
 	log.Printf("Configured container '%s' will be started with name '%s'.\n", container.Name, generatedContainerName)
 
@@ -254,43 +249,12 @@ func createContainer(runner ContainerRunner, auth string, spec api.ContainerSpec
 		runArgs = dockerstrslice.StrSlice(container.Args)
 	}
 
-	if err := runner.VolumesEnv.UnmountExistingVolumes(); err != nil {
-		log.Printf("Error: failed to unmount volumes:\n%v", err)
-	}
-	containerVolumeBindingConfigurationMap, volumePrepareError := runner.VolumesEnv.PrepareVolumesAndGetBindings(spec)
-	if volumePrepareError != nil {
-		return "", volumePrepareError
-	}
-	volumeBindingConfiguration, volumeBindingFound := containerVolumeBindingConfigurationMap[container.Name]
-	if !volumeBindingFound {
-		return "", fmt.Errorf("Volume binding configuration for container %s not found in the map. This should not happen.", container.Name)
-	}
-	// Docker-API compatible types.
-	hostPathBinds := []string{}
-	for _, hostPathBindConfiguration := range volumeBindingConfiguration {
-		hostPathBind := fmt.Sprintf("%s:%s", hostPathBindConfiguration.HostPath, hostPathBindConfiguration.ContainerPath)
-		if hostPathBindConfiguration.ReadOnly {
-			hostPathBind = fmt.Sprintf("%s:ro", hostPathBind)
-		}
-		hostPathBinds = append(hostPathBinds, hostPathBind)
-	}
-
 	env := []string{}
 	for _, envVar := range container.Env {
 		env = append(env, fmt.Sprintf("%s=%s", envVar.Name, envVar.Value))
 	}
 
-	restartPolicyName := "always"
-	if spec.RestartPolicy == nil || *spec.RestartPolicy == api.RestartPolicyAlways {
-		restartPolicyName = "always"
-	} else if *spec.RestartPolicy == api.RestartPolicyOnFailure {
-		restartPolicyName = "on-failure"
-	} else if *spec.RestartPolicy == api.RestartPolicyNever {
-		restartPolicyName = "no"
-	} else {
-		return "", fmt.Errorf(
-			"Invalid container declaration: Unsupported container restart policy '%s'", *spec.RestartPolicy)
-	}
+	restartPolicyName := "no"
 
 	opts := dockertypes.ContainerCreateConfig{
 		Name: generatedContainerName,
@@ -303,7 +267,6 @@ func createContainer(runner ContainerRunner, auth string, spec api.ContainerSpec
 			Tty:        container.Tty,
 		},
 		HostConfig: &dockercontainer.HostConfig{
-			Binds:       hostPathBinds,
 			AutoRemove:  false,
 			NetworkMode: "host",
 			Privileged:  container.SecurityContext.Privileged,

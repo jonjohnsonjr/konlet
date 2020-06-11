@@ -26,7 +26,6 @@ import (
 	"github.com/GoogleCloudPlatform/konlet/gce-containers-startup/utils"
 
 	api "github.com/GoogleCloudPlatform/konlet/gce-containers-startup/types"
-	yaml "gopkg.in/yaml.v2"
 )
 
 const METADATA_SERVER = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/gce-container-declaration"
@@ -64,25 +63,27 @@ func main() {
 }
 
 func ExecStartup(metadataProvider metadata.Provider, authProvider utils.AuthProvider, runner *runtime.ContainerRunner, openIptables bool) error {
-	body, err := metadataProvider.RetrieveManifest()
-	if err != nil {
-		return fmt.Errorf("Cannot load container declaration: %v", err)
+	var (
+		auth = ""
+		err  error
+	)
+
+	spec := api.Container{
+		Name:    "debugme",
+		Image:   "us-west1-docker.pkg.dev/jonjohnson-test/test/busybox",
+		Command: []string{"sh"},
+		Env: []struct {
+			Name  string
+			Value string
+		}{{
+			Name:  "PATH",
+			Value: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		}},
+		StdIn: true,
+		Tty:   true,
 	}
 
-	declaration := api.ContainerSpec{}
-	err = yaml.Unmarshal(body, &declaration)
-	if err != nil {
-		return fmt.Errorf("Cannot parse container declaration '%s': %v", body, err)
-	}
-
-	spec := declaration.Spec
-	if len(spec.Containers) != 1 {
-		return fmt.Errorf("Container declaration should include exactly 1 container, %d found", len(spec.Containers))
-	}
-
-	var auth = ""
-
-	if utils.UseGcpTokenForImage(spec.Containers[0].Image) {
+	if utils.UseGcpTokenForImage(spec.Image) {
 		auth, err = authProvider.RetrieveAuthToken()
 		if err != nil {
 			return fmt.Errorf("Cannot get auth token: %v", err)
@@ -98,7 +99,7 @@ func ExecStartup(metadataProvider metadata.Provider, authProvider utils.AuthProv
 		}
 	}
 
-	log.Printf("Launching user container '%s'", spec.Containers[0].Image)
+	log.Printf("Launching user container '%s'", spec.Image)
 	err = runner.RunContainer(auth, spec, *runDetachedFlag)
 	if err != nil {
 		return fmt.Errorf("Failed to start container: %v", err)
